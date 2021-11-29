@@ -1,0 +1,8 @@
+[package]
+name = "connection-leak-detector"
+authors = ["Finn Bear"]
+version = "0.1.0"
+edition = "2021"
+license = "UNLICENSE"
+
+[dependencies]
