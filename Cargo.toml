@@ -6,3 +6,8 @@ edition = "2021"
 license = "UNLICENSE"
 
 [dependencies]
+
+[dev-dependencies]
+actix-web = "4.0.0-beta.12"
+actix-rt = "2"
+tokio = "1"

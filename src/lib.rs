@@ -50,7 +50,7 @@ impl ConnectionLeakDetector {
 
     pub fn update(&mut self) -> Result<(), &'static str> {
         let output = Command::new("netstat")
-            .arg("-ntpo")
+            .arg("-natpo")
             .output()
             .map_err(|_| "net-tools/netstat must be installed")?;
 
@@ -165,11 +165,51 @@ impl NetstatLine {
 #[cfg(test)]
 mod tests {
     use crate::ConnectionLeakDetector;
+    use actix_web::rt::Runtime;
+    use actix_web::web::get;
+    use actix_web::{App, HttpResponse, HttpServer};
+    use core::mem;
+    use std::net::TcpStream;
+    use std::thread;
+    use std::time::Duration;
 
     #[test]
-    fn it_works() {
+    fn simple() {
         let mut detector = ConnectionLeakDetector::new();
         detector.update().unwrap();
         println!("{:?}", detector);
+    }
+
+    #[test]
+    fn actix_web() {
+        actix_rt::System::new().block_on(async move {
+            let server = HttpServer::new(|| App::new().route("/", get().to(|| HttpResponse::Ok())))
+                .shutdown_timeout(2)
+                .bind("127.0.0.1:8888")
+                .unwrap()
+                .run();
+
+            let handle = server.handle();
+
+            actix_rt::spawn(async move {
+                let mut detector = ConnectionLeakDetector::new();
+                let mut i = 0;
+                loop {
+                    let stream = TcpStream::connect("localhost:8888").unwrap();
+                    mem::forget(stream);
+
+                    detector.update().unwrap();
+                    println!("{:?}", detector);
+                    i += 1;
+                    if i > 4 {
+                        handle.stop(true).await;
+                        break;
+                    }
+                    actix_rt::time::sleep(Duration::from_secs(3)).await;
+                }
+            });
+
+            server.await.unwrap();
+        })
     }
 }
