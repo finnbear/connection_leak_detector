@@ -6,6 +6,7 @@ edition = "2021"
 license = "UNLICENSE"
 
 [dependencies]
+enum-iterator = "0.7"
 
 [dev-dependencies]
 actix-web = "4.0.0-beta.12"
