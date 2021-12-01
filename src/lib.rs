@@ -3,22 +3,22 @@ use std::process;
 use std::process::Command;
 use std::time::Instant;
 
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Eq, PartialEq, Debug, Ord, PartialOrd, Copy, Clone)]
 enum State {
     Listen,
     SynSent,
     SynReceived,
-    Established,
     FinWait1,
     FinWait2,
+    LastAck,
+    Established,
+    TimeWait,
     CloseWait,
     Closing,
-    LastAck,
-    TimeWait,
     Closed,
 }
 
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Eq, PartialEq, Debug, Copy, Clone)]
 enum Timer {
     Off,
     KeepAlive,
@@ -36,7 +36,9 @@ struct ConnectionLeakDetector {
 #[derive(Debug)]
 struct Connection {
     last_seen: Instant,
-    history: Vec<(Instant, NetstatLine)>,
+    foreign_addr: SocketAddr,
+    history: Vec<(Instant, NetstatSummary)>,
+    http2: Option<bool>,
 }
 
 impl ConnectionLeakDetector {
@@ -45,6 +47,28 @@ impl ConnectionLeakDetector {
             pid: process::id(),
             last_update: None,
             connections: Vec::new(),
+        }
+    }
+
+    fn connection_mut(&mut self, foreign_addr: &SocketAddr) -> Option<&mut Connection> {
+        self.connections.iter_mut().find(|c| {
+            if let Some(last_update) = self.last_update {
+                if c.last_seen < last_update {
+                    // Connections don't magically disappear and reappear.
+                    return false;
+                }
+            }
+            if c.foreign_addr != foreign_addr {
+                // Connections don't magically change addresses.
+                return false;
+            }
+            true
+        })
+    }
+
+    pub fn mark_http2(&mut self, foreign_addr: &SocketAddr, http2: bool) -> Result<(), ()> {
+        if let Some(connection) = self.connection_mut(foreign_addr) {
+            connection.http2 = Some(http2);
         }
     }
 
@@ -66,31 +90,19 @@ impl ConnectionLeakDetector {
                     continue;
                 }
 
-                if let Some(old) = self.connections.iter_mut().find(|c| {
-                    if let Some(last_update) = self.last_update {
-                        if c.last_seen < last_update {
-                            // Connections don't magically disappear and reappear.
-                            return false;
-                        }
-                    }
-                    let last_update = &c.history.last().unwrap().1;
-                    if last_update.local_addr != line.local_addr
-                        || last_update.foreign_addr != line.foreign_addr
-                    {
-                        // Connections don't magically change addresses.
-                        return false;
-                    }
-                    true
-                }) {
+                if let Some(old) = self.connection_mut(&line.foreign_addr) {
                     old.last_seen = now;
                     let last_update = &old.history.last().unwrap().1;
-                    if line.state != last_update.state {
-                        old.history.push((now, line));
+                    if line.state > last_update.state {
+                        // The state progressed.
+                        old.history.push((now, line.summarize()));
                     }
                 } else {
                     self.connections.push(Connection {
                         last_seen: now,
-                        history: vec![(now, line)],
+                        foreign_addr: line.foreign_addr,
+                        history: vec![(now, line.summarize())],
+                        http2: None,
                     })
                 }
             }
@@ -100,6 +112,14 @@ impl ConnectionLeakDetector {
 
         Ok(())
     }
+}
+
+#[derive(Debug)]
+struct NetstatSummary {
+    receive_queue: usize,
+    send_queue: usize,
+    state: State,
+    timer: Timer,
 }
 
 #[derive(Debug)]
@@ -160,6 +180,15 @@ impl NetstatLine {
             timer,
         })
     }
+
+    fn summarize(&self) -> NetstatSummary {
+        NetstatSummary {
+            send_queue: self.send_queue,
+            receive_queue: self.receive_queue,
+            state: self.state,
+            timer: self.timer,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -169,11 +198,13 @@ mod tests {
     use actix_web::web::get;
     use actix_web::{App, HttpResponse, HttpServer};
     use core::mem;
+    use serial_test::serial;
     use std::net::TcpStream;
     use std::thread;
     use std::time::Duration;
 
     #[test]
+    #[serial]
     fn simple() {
         let mut detector = ConnectionLeakDetector::new();
         detector.update().unwrap();
@@ -181,9 +212,12 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn actix_web() {
         actix_rt::System::new().block_on(async move {
             let server = HttpServer::new(|| App::new().route("/", get().to(|| HttpResponse::Ok())))
+                .keep_alive(2)
+                .client_timeout(2)
                 .shutdown_timeout(2)
                 .bind("127.0.0.1:8888")
                 .unwrap()
