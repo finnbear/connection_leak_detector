@@ -353,7 +353,7 @@ impl Connection {
         match self.verdict {
             Verdict::Exempt => return false,
             Verdict::Expired => return true,
-            Verdict::None => (),
+            _ => (),
         }
         if timestamp.max(&self.last_update).elapsed() < leak_threshold {
             // Made progress recently; not a leak.
