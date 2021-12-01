@@ -334,6 +334,7 @@ impl Connection {
 }
 
 #[derive(Debug)]
+#[allow(unused)]
 struct NetstatSummary {
     receive_queue: usize,
     send_queue: usize,
@@ -342,6 +343,7 @@ struct NetstatSummary {
 }
 
 #[derive(Debug)]
+#[allow(unused)]
 struct NetstatLine {
     receive_queue: usize,
     send_queue: usize,
@@ -413,14 +415,11 @@ impl NetstatLine {
 
 #[cfg(test)]
 mod tests {
-    use crate::{ConnectionLeakDetector, Encryption, Protocol};
-    use actix_web::rt::Runtime;
+    use crate::{ConnectionLeakDetector, Encryption};
     use actix_web::web::get;
     use actix_web::{App, HttpResponse, HttpServer};
-    use core::mem;
     use serial_test::serial;
     use std::net::TcpStream;
-    use std::thread;
     use std::time::Duration;
 
     #[test]
