@@ -1,9 +1,11 @@
 [package]
-name = "connection-leak-detector"
+name = "connection_leak_detector"
+description = "Detects TCP connection leaks with respect to a particular PID"
 authors = ["Finn Bear"]
 version = "0.1.0"
 edition = "2021"
-license = "UNLICENSE"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/finnbear/connection_leak_detector"
 
 [dependencies]
 enum-iterator = "0.7"
