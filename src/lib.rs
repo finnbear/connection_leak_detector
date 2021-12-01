@@ -73,6 +73,10 @@ impl Default for Encryption {
 #[derive(Eq, PartialEq, Debug, Copy, Clone, Hash, IntoEnumIterator, Serialize, Deserialize)]
 pub enum Verdict {
     None,
+    /// Opened but didn't do anything yet.
+    New,
+    /// Made at least one request.
+    MadeRequest,
     /// Will never be considered a leak.
     Exempt,
     /// Will be considered a leak if open, even before the leak_threshold.
