@@ -1,4 +1,7 @@
+extern crate serde;
+
 use enum_iterator::IntoEnumIterator;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::fs::OpenOptions;
@@ -8,7 +11,7 @@ use std::process::Command;
 use std::time::{Duration, Instant, SystemTime};
 use std::{mem, process};
 
-#[derive(Eq, PartialEq, Debug, Ord, PartialOrd, Copy, Clone)]
+#[derive(Eq, PartialEq, Debug, Ord, PartialOrd, Copy, Clone, Serialize, Deserialize)]
 pub enum State {
     Listen,
     SynSent,
@@ -23,7 +26,7 @@ pub enum State {
     Closed,
 }
 
-#[derive(Eq, PartialEq, Debug, Copy, Clone, Hash)]
+#[derive(Eq, PartialEq, Debug, Copy, Clone, Hash, Serialize, Deserialize)]
 pub enum Timer {
     Off,
     KeepAlive,
@@ -33,7 +36,7 @@ pub enum Timer {
 
 /// Serves as a indicator of what might causing leaks.
 /// The user is relied upon to specify this properly.
-#[derive(Eq, PartialEq, Debug, Copy, Clone, Hash, IntoEnumIterator)]
+#[derive(Eq, PartialEq, Debug, Copy, Clone, Hash, IntoEnumIterator, Serialize, Deserialize)]
 pub enum Protocol {
     Tcp,
     Http09,
@@ -52,7 +55,7 @@ impl Default for Protocol {
 
 /// Serves as a indicator of what might causing leaks.
 /// The user is relied upon to specify this properly.
-#[derive(Eq, PartialEq, Debug, Copy, Clone, Hash, IntoEnumIterator)]
+#[derive(Eq, PartialEq, Debug, Copy, Clone, Hash, IntoEnumIterator, Serialize, Deserialize)]
 pub enum Encryption {
     Unknown,
     None,
@@ -67,7 +70,7 @@ impl Default for Encryption {
 
 /// Serves as a indicator of what might causing leaks.
 /// The user is relied upon to specify this properly.
-#[derive(Eq, PartialEq, Debug, Copy, Clone, Hash, IntoEnumIterator)]
+#[derive(Eq, PartialEq, Debug, Copy, Clone, Hash, IntoEnumIterator, Serialize, Deserialize)]
 pub enum Verdict {
     None,
     /// Will never be considered a leak.
@@ -207,17 +210,23 @@ impl ConnectionLeakDetector {
 
                 if let Some(old) = self.connection_mut(&line.foreign_addr) {
                     old.last_seen = now;
-                    let last_update = &old.history.last().unwrap().1;
+                    let last_update = &old.history.last().unwrap().summary;
                     if line.state > last_update.state {
                         // The state progressed.
-                        old.history.push((now, line.summarize()));
+                        old.history.push(HistoryItem {
+                            timestamp: now,
+                            summary: line.summarize(),
+                        });
                     }
                 } else {
                     self.connections.push(Connection {
                         last_seen: now,
                         last_update: now,
                         foreign_addr: line.foreign_addr,
-                        history: vec![(now, line.summarize())],
+                        history: vec![HistoryItem {
+                            timestamp: now,
+                            summary: line.summarize(),
+                        }],
                         protocol: Protocol::default(),
                         encryption: Encryption::default(),
                         verdict: Verdict::default(),
@@ -305,26 +314,35 @@ pub struct LeakReport {
     pub by_encryption: HashMap<Encryption, usize>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Connection {
+    #[serde(with = "approx_instant")]
     last_seen: Instant,
+    #[serde(with = "approx_instant")]
     last_update: Instant,
     foreign_addr: SocketAddr,
     /// Never empty.
-    history: Vec<(Instant, NetstatSummary)>,
+    history: Vec<HistoryItem>,
     protocol: Protocol,
     encryption: Encryption,
     verdict: Verdict,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HistoryItem {
+    #[serde(with = "approx_instant")]
+    timestamp: Instant,
+    summary: NetstatSummary,
+}
+
 impl Connection {
     fn is_leaked(&self, last_update: Instant, leak_threshold: Duration) -> bool {
-        let (last_time, last_summary) = self.history.last().unwrap();
+        let HistoryItem { timestamp, summary } = self.history.last().unwrap();
         if self.last_seen < last_update {
             // No longer exists; not a leak.
             return false;
         }
-        if last_summary.state == State::Closed {
+        if summary.state == State::Closed {
             // Closed; not a leak.
             return false;
         }
@@ -333,7 +351,7 @@ impl Connection {
             Verdict::Expired => return true,
             Verdict::None => (),
         }
-        if last_time.max(&self.last_update).elapsed() < leak_threshold {
+        if timestamp.max(&self.last_update).elapsed() < leak_threshold {
             // Made progress recently; not a leak.
             return false;
         }
@@ -341,7 +359,7 @@ impl Connection {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 #[allow(unused)]
 struct NetstatSummary {
     receive_queue: usize,
@@ -418,6 +436,34 @@ impl NetstatLine {
             state: self.state,
             timer: self.timer,
         }
+    }
+}
+
+// https://github.com/serde-rs/serde/issues/1375#issuecomment-419688068
+mod approx_instant {
+    use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
+    use std::time::{Instant, SystemTime};
+
+    pub fn serialize<S>(instant: &Instant, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let system_now = SystemTime::now();
+        let instant_now = Instant::now();
+        let approx = system_now - (instant_now - *instant);
+        approx.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Instant, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let de = SystemTime::deserialize(deserializer)?;
+        let system_now = SystemTime::now();
+        let instant_now = Instant::now();
+        let duration = system_now.duration_since(de).map_err(Error::custom)?;
+        let approx = instant_now - duration;
+        Ok(approx)
     }
 }
 
