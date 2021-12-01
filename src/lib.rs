@@ -36,7 +36,8 @@ pub enum Timer {
 #[derive(Eq, PartialEq, Debug, Copy, Clone, Hash, IntoEnumIterator)]
 pub enum Protocol {
     Tcp,
-    Http1,
+    Http09,
+    Http10,
     Http11,
     Http2,
     Http3,
