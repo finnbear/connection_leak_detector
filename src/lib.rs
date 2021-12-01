@@ -267,6 +267,10 @@ impl ConnectionLeakDetector {
             write!(file, "{}", buf).map_err(|_| "could not write to log file")?;
         }
 
+        // Don't remember gone connections forever.
+        self.connections
+            .retain(|c| c.last_seen.elapsed() < Duration::from_secs(7 * 24 * 3600));
+
         Ok(())
     }
 
