@@ -277,8 +277,7 @@ impl ConnectionLeakDetector {
         }
 
         // Don't remember gone connections forever.
-        self.connections
-            .retain(|c| c.last_seen.elapsed() < Duration::from_secs(7 * 24 * 3600));
+        self.connections.retain(|c| c.last_seen == now);
 
         Ok(())
     }
